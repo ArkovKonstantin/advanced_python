@@ -1,69 +1,61 @@
 from core import Model, IntField, StringField
 
+
 class User(Model):
-   id = IntField()
-   name = StringField()
+    id = IntField()
+    name = StringField()
 
-   class Meta:
-       table_name = 'User'
+    class Meta:
+        table_name = 'User'
+
+
 #
 #
-# class Man(User):
-#     sex = StringField()
-#
-#
-user = User(id=1, name="name")
-print("User instance", user.__dict__)
+class Man(User):
+    sex = StringField()
 
-user.id = 2
-user.name = "abc"
-print("User instance", user.__dict__)
-
-user.save()
-# User.objects.all().filter(name="abc")
-
-# user_obj = User.objects.create(id=3, name='Jone')
-
-# print("create", user_obj, "\n", user_obj.__dict__)
+    class Meta:
+        table_name = "Man"
 
 
-print(user.__dict__)
-# user.save()
+print('-------Создание обьектов--------')
+man = Man(sex = "m", id=5)
+man.save()
 
-# print(str([1, 2, 3]))
-# print(user.__dict__)
-# print(user.id)
-# user.save()
-# user.save() # сохранение в бд
+user1 = User.objects.create(id=1, name='Mishgan')
+user3 = User.objects.create(id=1, name='Lexa')
+user4 = User.objects.create(id=1, name='Jone')
 
+user2 = User(id=2, name="Irjan")
+user2.save()
 
-class Manage:
-   def __get__(self, instance, owner):
-       print("instance: ", instance, "\n", "owner: ", owner)
-       print(owner.__bases__[-1])
-       print(instance.__class__)
+print('man: ', man)
+print('user1: ', user1)
+print('user2: ', user2)
 
+print('-------Изменение обьектов--------')
 
-class A:
-   a_attr = "val"
-   obj = Manage()
+user1.name = "Miha"
+user1.save()
+user1 = User.objects.get(name="Miha")
+print('user1: ', user1)
 
+user2.update(name="Nurmagomed")
+print('user2: ', user2.name) # object
+user2 = User.objects.get(id=2) # get from db
+print('user2: ', user2.name)
 
-class B(A):
-   b_attr = "b_attr"
+print('-------Удаление обьектов--------')
 
-a = A()
-b = B()
+user2.delete()
+user2 = User.objects.get(id=2)
+print('user2: ', user2)
 
-print(b.obj)
+print('-------all(); filter()--------')
 
+qs = User.objects.filter(id=1).filter(name='Jone')
+gen = iter(qs)
+print(vars(next(gen)))
 
-
-# User.objects.update(id=1)
-# User.objects.delete(id=1)
-#
-# User.objects.filter(id=2).filter(name='petya')
-#
-# user.name = '2'
-# user.save()
-# user.delete()
+for item in User.objects.all():
+    print(item)
