@@ -14,7 +14,10 @@ class Field(abc.ABC):
         setattr(instance, self.storage_name, value)
 
     def __get__(self, instance, owner):
-        return getattr(instance, self.storage_name)
+        if instance:
+            return getattr(instance, self.storage_name)
+        else:
+            return type(self).__name__
 
     @abc.abstractmethod
     def validate(self, value):
@@ -23,6 +26,7 @@ class Field(abc.ABC):
 
         try:
             value = self.f_type(value)
+
         except ValueError:
             raise ValueError(f'Value must me {self.f_type}')
 
@@ -52,6 +56,26 @@ class StringField(Field):
 
 
 class ModelMeta(type):
+
+    def __init__(cls, name, bases, namespace):
+        # cls уже готовый обьект
+        super().__init__(name, bases, namespace)  # зачем вызывать super.__init__
+        if name != 'Model':
+            fields = {}
+            for sub_cls in cls.mro()[:-1]:
+                for k, v in vars(sub_cls).items():
+                    if isinstance(v, Field):
+                        cls_name = v.__class__.__name__
+                        v.storage_name = f"{cls_name}#{k}"
+                        fields[k] = v
+
+            # namespace['_fields'] = fields <- почему так не работает
+            cls._fields = fields
+            # создание таблицы в бд
+            with SQLighter(config.db_name) as db_worker:
+                table_name = cls._table_name
+                db_worker.create_table(fields, table_name)
+
     def __new__(mcs, name, bases, namespace):
         if name == 'Model':
             return super().__new__(mcs, name, bases, namespace)
@@ -62,19 +86,53 @@ class ModelMeta(type):
         if not hasattr(meta, 'table_name'):
             raise ValueError('table_name is empty')
 
-        # todo mro
-        fields = {}
-        for k, v in namespace.items():
-            if isinstance(v, Field):
-                cls_name = v.__class__.__name__
-                v.storage_name = f"{cls_name}#{k}"
-                fields[k] = v
-
-        namespace['_fields'] = fields
         namespace['_table_name'] = meta.table_name
+
         return super().__new__(mcs, name, bases, namespace)
 
-# TODO QuerySet
+
+# todo subscriptable
+class QuerySet:
+
+    def __init__(self, model_cls, attrs: dict = None):
+        self.model_cls = model_cls
+        if attrs is None:
+            self.attrs = {}
+        else:
+            self.attrs = attrs
+
+    def filter(self, **kwargs):
+
+        self.attrs.update(kwargs)
+        return QuerySet(self.model_cls, self.attrs)
+
+    def __iter__(self):
+        table_name = self.model_cls._table_name
+        with SQLighter(config.db_name) as db_worker:
+            param = 'AND '.join(map(lambda item: f"{item[0]}='{item[1]}'",
+                                 self.attrs.items()))
+            sql_query = f"SELECT * FROM {table_name}"
+            if param:
+                sql_query = f"SELECT * FROM {table_name} WHERE {param}"
+
+            print(sql_query)
+            table_data = db_worker.cursor.execute(sql_query).fetchall()
+
+        attrs = list(attr for attr in vars(self.model_cls)
+                     if not attr.startswith('_') and attr != 'Meta')
+
+        for row in table_data:
+            pk = row[0]
+            instance = self.model_cls(**dict(zip(attrs, row[1:])))
+            setattr(instance, 'pk', pk)
+
+            yield instance
+    #todo
+    def __len__(self):
+        """кол во записей в таблице"""
+
+
+
 class Manage:
 
     def __init__(self):
@@ -91,16 +149,28 @@ class Manage:
         return instance
 
     def all(self) -> QuerySet:
-        table_name = self.model_cls._table_name
-        sql_query = f'SELECT * FROM {table_name}'
-        with SQLighter(config.db_name) as db_worker:
-            items = db_worker.cursor.execute(sql_query).fetchall()
-        return items
+        """Вернуть все записи"""
+        return QuerySet(self.model_cls)
+
+    def filter(self, **kwargs) -> QuerySet:
+        return QuerySet(self.model_cls, kwargs)
 
     def get(self, **kwargs):
-        """Должен вернуть уникальный экземляр"""
-        pass
+        """Должен вернуть один уникальный экземляр"""
+        with SQLighter(config.db_name) as db_worker:
+            result = db_worker.get_record(self, kwargs)
+            if result:
+                if len(result) == 1:
+                    attrs = list(attr for attr in vars(self.model_cls)
+                                 if not attr.startswith('_') and attr != 'Meta')
 
+                    pk = result[0][0]
+                    instance = self.model_cls(**dict(zip(attrs, result[0][1:])))
+                    setattr(instance, 'pk', pk)
+                    return instance
+                raise ValueError("много записей")
+
+            return None
 
 
 class Model(metaclass=ModelMeta):
@@ -109,9 +179,6 @@ class Model(metaclass=ModelMeta):
 
     objects = Manage()
 
-    def __new__(cls, *args, **kwargs):
-        pass
-
     # todo DoesNotExist
 
     def __init__(self, *_, **kwargs):
@@ -119,42 +186,19 @@ class Model(metaclass=ModelMeta):
             value = kwargs.get(field_name)
             setattr(self, field_name, value)
 
-    # TODO pk
-    # TODO перенести логику создания таблиц в метакласс
     def save(self):
         with SQLighter(config.db_name) as db_worker:
-            table_name = type(self)._table_name
-
-            attrs = ','.join(map(lambda lst: f'{lst[1]} {db_worker._db_field[lst[0]]}',
-                                 (k.split('#') for k in vars(self))))
-
-            sql_query = f"SELECT count(*) FROM sqlite_master" \
-                        f" WHERE type = 'table' AND name = '{table_name}';"
-            table_exists = db_worker.cursor.execute(sql_query).fetchone()
-
-            if table_exists:
-                sql_query = f"CREATE TABLE IF NOT EXISTS {table_name}({attrs})"
-                # print("attr: ", attrs, "\n", "sql_query", sql_query)
-            else:
-                pk = vars(self)[f'{type(self)}#pk']
-                sql_query = f"INSERT {table_name} SET {attrs} WHERE pk = {pk}"  # insert
-
-            db_worker.cursor.execute(sql_query)
-            # установить pk в обьект
-            pk = db_worker.exexute("COUNT ...")
-            setattr(self, "pk", pk)
-
+            db_worker.create_record(self)
 
     def update(self, **kwargs):
+        """обновить обьект и запись в таблице"""
         with SQLighter(config.db_name) as db_worker:
-            table_name = type(self)._table_name
-
-            attrs = ','.join(map(lambda lst: f'{lst[1]} {db_worker._db_field[lst[0]]}',
-                                 (k.split('#') for k in vars(self))))
-
-            pk = vars(self)['pk']
-            sql_query = f"UPDATE {table_name} SET {attrs} WHERE pk = {pk}"
-            db_worker.cursor.execute(sql_query)
+            db_worker.update_record(self, **kwargs)
 
     def delete(self):
         """удаление записи из таблицы"""
+        with SQLighter(config.db_name) as db_worker:
+            db_worker.delete_record(self)
+
+    def __str__(self):
+        return str(vars(self))
