@@ -86,7 +86,7 @@ def build_request(results):
 
 
 
-def upload_photo2(results):
+def upload_photo(results):
     """Процесс для отправки фотографий, используя несколько потоков"""
     print(f'Starting process {mp.current_process().name}')
     t_count = 5
@@ -117,7 +117,7 @@ if __name__ == '__main__':
     for i in range(n_procs - 1):
         mp.Process(target=create_photo, args=(tasks, results), name=f'render_worker {i+1}').start()
 
-    mp.Process(target=upload_photo2, args=(results, ), name=f'upload_worker {n_procs}').start()
+    mp.Process(target=upload_photo, args=(results, ), name=f'upload_worker {n_procs}').start()
 
     polling(tasks)
 
