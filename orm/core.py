@@ -9,15 +9,15 @@ class Field(abc.ABC):
         self.required = required
         self.default = default
 
-    def __set__(self, instance, value):
-        value = self.validate(value)
-        setattr(instance, self.storage_name, value)
-
-    def __get__(self, instance, owner):
-        if instance:
-            return getattr(instance, self.storage_name)
-        else:
-            return type(self).__name__
+    # def __set__(self, instance, value):
+    #     value = self.validate(value)
+    #     setattr(instance, self.storage_name, value)
+    #
+    # def __get__(self, instance, owner):
+    #     if instance:
+    #         return getattr(instance, self.storage_name)
+    #     else:
+    #         return type(self).__name__
 
     @abc.abstractmethod
     def validate(self, value):
@@ -65,8 +65,6 @@ class ModelMeta(type):
             for sub_cls in cls.mro()[:-1]:
                 for k, v in vars(sub_cls).items():
                     if isinstance(v, Field):
-                        cls_name = v.__class__.__name__
-                        v.storage_name = f"{cls_name}#{k}"
                         fields[k] = v
 
             # namespace['_fields'] = fields <- почему так не работает
@@ -87,8 +85,10 @@ class ModelMeta(type):
             raise ValueError('table_name is empty')
 
         namespace['_table_name'] = meta.table_name
-
         return super().__new__(mcs, name, bases, namespace)
+
+    def __call(cls):
+        """"""
 
 
 # todo subscriptable
@@ -110,7 +110,7 @@ class QuerySet:
         table_name = self.model_cls._table_name
         with SQLighter(config.db_name) as db_worker:
             param = 'AND '.join(map(lambda item: f"{item[0]}='{item[1]}'",
-                                 self.attrs.items()))
+                                    self.attrs.items()))
             sql_query = f"SELECT * FROM {table_name}"
             if param:
                 sql_query = f"SELECT * FROM {table_name} WHERE {param}"
@@ -127,10 +127,10 @@ class QuerySet:
             setattr(instance, 'pk', pk)
 
             yield instance
-    #todo
+
+    # todo
     def __len__(self):
         """кол во записей в таблице"""
-
 
 
 class Manage:
@@ -161,12 +161,12 @@ class Manage:
             result = db_worker.get_record(self, kwargs)
             if result:
                 if len(result) == 1:
-                    attrs = list(attr for attr in vars(self.model_cls)
-                                 if not attr.startswith('_') and attr != 'Meta')
 
+                    attrs = self.model_cls._fields.keys()
                     pk = result[0][0]
                     instance = self.model_cls(**dict(zip(attrs, result[0][1:])))
                     setattr(instance, 'pk', pk)
+                    instance._updated_fields = {}
                     return instance
                 raise ValueError("много записей")
 
@@ -181,19 +181,37 @@ class Model(metaclass=ModelMeta):
 
     # todo DoesNotExist
 
+
     def __init__(self, *_, **kwargs):
+        # col names; col values;
+        self._updated_fields = {} # dict атрибутов, которые были обновлены
+
         for field_name, field in self._fields.items():
             value = kwargs.get(field_name)
             setattr(self, field_name, value)
+
+    def __setattr__(self, key, value):
+
+        try:
+            field = self._fields[key]
+            val = field.validate(value)
+            self.__dict__[key] = val
+            # todo col names, values
+            self._updated_fields[key] = val
+        except KeyError:
+            self.__dict__[key] = value
+
 
     def save(self):
         with SQLighter(config.db_name) as db_worker:
             db_worker.create_record(self)
 
     def update(self, **kwargs):
+        self._updated_fields.update(kwargs)
+
         """обновить обьект и запись в таблице"""
         with SQLighter(config.db_name) as db_worker:
-            db_worker.update_record(self, **kwargs)
+            db_worker.update_record(self)
 
     def delete(self):
         """удаление записи из таблицы"""
@@ -202,3 +220,4 @@ class Model(metaclass=ModelMeta):
 
     def __str__(self):
         return str(vars(self))
+

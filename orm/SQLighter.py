@@ -26,61 +26,58 @@ class SQLighter:
         self.cursor.execute(sql_query)
 
     def create_record(self, instance):
-        attrs = vars(instance)
-        pk = attrs.get('pk', None)
+        pk = instance.__dict__.get('pk', None)
         table_name = instance._table_name
-
+        col_names = tuple(instance._updated_fields.keys())  # (id, name, ...)
+        col_values = tuple(instance._updated_fields.values())  # (3, Jone)
         if pk is None:
             # insert
-            keys = ','.join((k.split('#')[1] for k in attrs))
-            values = ','.join(f"'{str(v)}'" for v in attrs.values())
-            sql_query = f'INSERT INTO {table_name}({keys})' \
-                        f'VALUES({values})'
 
-            self.cursor.execute(sql_query)
+            placeholders = ",".join("?"*len(col_values)) #  получаем строку вида (?, ?, ...)
+
+            sql_query = f'INSERT INTO {table_name} {col_names} VALUES ({placeholders})'
+            print(sql_query)
+
+            self.cursor.execute(sql_query, col_values)
             self._connection.commit()
             pk = self.cursor.execute("SELECT last_insert_rowid()").fetchone()[0]
             setattr(instance, 'pk', pk)
+            instance._updated_fields = {}
         else:
-            # update
-            param = ','.join(map(lambda item: f"{item[0].split('#')[-1]}='{item[1]}'",
-                                 attrs.items()))
-            sql_query = f"UPDATE {table_name} " \
-                        f"SET {param}" \
-                        f"WHERE pk='{instance.pk}'"
+            self.update_record(instance)
 
-            self.cursor.execute(sql_query)
-            self._connection.commit()
+
 
     def delete_record(self, instance):
         attrs = vars(instance)
         pk = attrs.get('pk', None)
         table_name = instance._table_name
         sql_query = f"DELETE FROM {table_name} WHERE pk = '{pk}'"
+
         self.cursor.execute(sql_query)
         self._connection.commit()
 
-    def update_record(self, instance, **kwargs):
-        pk = instance.pk
+    def update_record(self, instance):
         table_name = instance._table_name
+        col_names = tuple(instance._updated_fields.keys())  # (id, name, ...)
+        col_values = tuple(instance._updated_fields.values())  # (3, Jone)
 
-        param = ','.join(map(lambda item: f"{item[0]}='{item[1]}'",
-                             kwargs.items()))
+        placeholders = ','.join(map(lambda key: f"{key}=?", col_names))  # col1=?, col2=?
         sql_query = f"UPDATE {table_name} " \
-                    f"SET {param}" \
-                    f"WHERE pk='{pk}'"
+                    f"SET {placeholders}" \
+                    f"WHERE pk=?"
+        print(sql_query)
+        self.cursor.execute(sql_query, (*col_values, instance.pk))
+        # После создания|обновления записи в бд, в updated_field кладем пустое значение
+        instance._updated_fields = {}
 
-        for k, v in kwargs.items():
-            k = f"{getattr(type(instance), k)}#{k}"
-            vars(instance)[k] = v
-
-        self.cursor.execute(sql_query)
-        self._connection.commit()
 
     def get_record(self, instance, attrs: dict):
-        table_name = instance.model_cls._table_name
-        param = ','.join(map(lambda item: f"{item[0]}='{item[1]}'",
-                             attrs.items()))
 
-        sql_query = f"SELECT * FROM {table_name} WHERE {param}"
-        return self.cursor.execute(sql_query).fetchall()
+        table_name = instance.model_cls._table_name
+        placeholders = ','.join(map(lambda key: f"{key}=?", attrs))
+
+        sql_query = f"SELECT * FROM {table_name} WHERE {placeholders}"
+        print("get_record", sql_query)
+
+        return self.cursor.execute(sql_query, tuple(attrs.values())).fetchall()
